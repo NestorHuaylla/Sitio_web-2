@@ -1,0 +1,15 @@
+.contenedora {
+    display: flex;
+    justify-content: center; /* Horizontal */
+    align-items: center;     /* Vertical */
+    height: 50px;}
+.imagen-circular {
+    width: 60px;          /* tamaño de la imagen */
+    height: 60px;         /* debe ser igual al width para que sea círculo */
+    object-fit: cover;     /* recorta para que no se distorsione */
+    border-radius: 50%;    /* hace el círculo */
+}
+.nombre {
+    font-size: 18px;
+    font-weight: 600;
+}
