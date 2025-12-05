@@ -4,107 +4,514 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Mi Perfil</title>
+  
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css">
-</head>
-<body class="bg-light">
+  <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
+  
+  <style>
+    /* 1. CONFIGURACIÓN BÁSICA */
+    body {
+      background-color: #0b0f19;
+      color: white;
+      font-family: 'Segoe UI', sans-serif;
+      overflow-x: hidden;
+    }
 
-  <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+    /* 2. CLASE COMÚN PARA LOS FONDOS */
+    .fondo-pantalla {
+      position: fixed;
+      top: 0; left: 0; width: 100%; height: 100%;
+      z-index: -1;
+      pointer-events: none; /* Importante para poder dar clic a los botones */
+    }
+
+    /* 3. CAPA A: TU ARCHIVO SVG */
+    #capa-svg {
+      background-image: url("fondoanimado.svg");
+      background-size: cover;
+      background-position: center;
+      /* ANIMACIÓN: Aparece y desaparece */
+      animation: alternar 20s infinite;
+    }
+
+    /* 4. CAPA B: EL 3D (THREE.JS) */
+    #canvas-3d {
+      /* ANIMACIÓN: Lo opuesto (empieza invisible) */
+      animation: alternar 20s infinite;
+      animation-delay: 10s;
+      opacity: 0;
+    }
+
+    /* LA ANIMACIÓN DE "RESPIRACIÓN" */
+    @keyframes alternar {
+      0%, 45% { opacity: 1; }   /* Visible */
+      50%, 95% { opacity: 0; }  /* Invisible */
+      100% { opacity: 1; }      /* Visible de nuevo */
+    }
+
+    /* ESTILOS EXTRAS (Tus tarjetas y fotos) */
+    .glass-card {
+      background: rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(5px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      text-decoration: none; color: white !important; display: block;
+      transition: transform 0.3s;
+    }
+    .glass-card:hover { transform: translateY(-5px); border-color: #00ffcc; }
+    
+    .profile-pic {
+      width: 60px; height: 60px; border-radius: 50%; border: 2px solid #00ffcc;
+      object-fit: cover; cursor: pointer; transition: transform 0.3s;
+    }
+    .profile-pic:hover { transform: scale(1.1); }
+    /* --- CORRECCIÓN PARA EL FONDO DE PUNTOS (Game of Life) --- */
+    svg#main-svg {
+        position: fixed;  /* ESTO ES LO IMPORTANTE: Lo clava a la pantalla */
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        z-index: -2;      /* Lo manda al fondo de todo */
+        background-color: #000; /* Fondo negro */
+    }
+</style>
+</head>
+<body>
+  <div id="capa-svg" class="fondo-pantalla"></div>
+  <div id="canvas-3d" class="fondo-pantalla"></div>
+<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" style="background-color: #000000;" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice" id="main-svg">
+  
+  <defs>
+    <!-- Filtro Glow (Resplandor) -->
+    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="4" result="coloredBlur" />
+      <feGaussianBlur stdDeviation="8" result="softBlur" />
+      <feMerge>
+        <feMergeNode in="softBlur" />
+        <feMergeNode in="coloredBlur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Grupo contenedor donde se dibujará todo -->
+  <g id="world"></g>
+
+  <!-- Lógica de Animación (JavaScript Embebido) -->
+  <script type="text/javascript">
+    <![CDATA[
+      (function() {
+        // --- CONFIGURACIÓN ---
+        const NODE_SPACING_BASE = 80;
+        const TUNNEL_DEPTH = 3000;
+        const FOCAL_LENGTH = 600;
+        const TRAVEL_SPEED = 20;
+
+        const COLORS = {
+          birth: '#00ff66',  // Verde neón
+          stable: '#00d2ff', // Azul eléctrico
+          dying: '#ff0033'   // Rojo neón
+        };
+
+        // Estado Global
+        let grid = [];
+        let cols = 0;
+        let rows = 0;
+        let centerX = 960; // Mitad del viewBox default
+        let centerY = 540;
+        let cameraZ = 0;
+        let lastGolUpdate = 0;
+
+        const svgElement = document.getElementById('main-svg');
+        const worldGroup = document.getElementById('world');
+
+        // --- INICIALIZACIÓN ---
+        function initGrid() {
+          // Detectar tamaño real para calcular columnas
+          const width = window.innerWidth || 1920;
+          const height = window.innerHeight || 1080;
+          
+          // Actualizar ViewBox para responsive
+          svgElement.setAttribute('viewBox', `0 0 ${width} ${height}`);
+          centerX = width / 2;
+          centerY = height / 2;
+
+          cols = Math.ceil(width / NODE_SPACING_BASE) * 2;
+          rows = Math.ceil(height / NODE_SPACING_BASE) * 2;
+          
+          const centerCol = cols / 2;
+          const centerRow = rows / 2;
+
+          grid = [];
+          for (let i = 0; i < cols; i++) {
+            grid[i] = [];
+            for (let j = 0; j < rows; j++) {
+              grid[i][j] = {
+                active: Math.random() > 0.92,
+                age: 0,
+                dying: false,
+                baseX: (i - centerCol) * NODE_SPACING_BASE,
+                baseY: (j - centerRow) * NODE_SPACING_BASE,
+                baseZ: Math.random() * TUNNEL_DEPTH
+              };
+            }
+          }
+        }
+
+        // --- LÓGICA JUEGO DE LA VIDA ---
+        function computeNextGeneration() {
+          let activeCount = 0;
+          // Clonar estado simple para siguiente generación
+          // Nota: En SVG puro optimizamos evitando recrear objetos innecesarios
+          const nextStateMap = new Map(); // Guardamos cambios: "i,j" -> {active, age, dying}
+
+          for (let i = 0; i < cols; i++) {
+            for (let j = 0; j < rows; j++) {
+              const cell = grid[i][j];
+              let neighbors = 0;
+              
+              // Contar vecinos
+              for (let x = -1; x <= 1; x++) {
+                for (let y = -1; y <= 1; y++) {
+                  if (x === 0 && y === 0) continue;
+                  const ni = (i + x + cols) % cols;
+                  const nj = (j + y + rows) % rows;
+                  if (grid[ni][nj].active) neighbors++;
+                }
+              }
+
+              let newState = { ...cell }; // Copia superficial
+
+              if (cell.active) {
+                if (neighbors < 2 || neighbors > 3) {
+                  newState.active = false;
+                  newState.dying = true;
+                  newState.age = 0;
+                } else {
+                  newState.age += 1;
+                  newState.dying = false;
+                }
+              } else {
+                if (neighbors === 3) {
+                  newState.active = true;
+                  newState.dying = false;
+                  newState.age = 0;
+                } else {
+                  if (cell.dying) newState.dying = false;
+                }
+              }
+
+              if (newState.active) activeCount++;
+              
+              // Guardamos el nuevo estado en la grid temporal
+              nextStateMap.set(`${i},${j}`, newState);
+            }
+          }
+
+          // Rescate Infinito (Si hay pocos nodos, revivir algunos)
+          if (activeCount <= 4) {
+            for (let i = 0; i < cols; i++) {
+              for (let j = 0; j < rows; j++) {
+                if (Math.random() > 0.90) {
+                  const key = `${i},${j}`;
+                  const s = nextStateMap.get(key) || { ...grid[i][j] };
+                  if (!s.active) {
+                    s.active = true;
+                    s.age = 0;
+                    s.dying = false;
+                    nextStateMap.set(key, s);
+                  }
+                }
+              }
+            }
+          }
+
+          // Aplicar cambios a la grid principal
+          nextStateMap.forEach((val, key) => {
+            const [i, j] = key.split(',').map(Number);
+            grid[i][j] = val;
+          });
+        }
+
+        // --- PROYECCIÓN 3D ---
+        function project(baseX, baseY, baseZ) {
+          let relativeZ = (baseZ - cameraZ) % TUNNEL_DEPTH;
+          if (relativeZ <= 0) relativeZ += TUNNEL_DEPTH;
+          
+          if (relativeZ < FOCAL_LENGTH / 10) return null;
+
+          const scale = FOCAL_LENGTH / relativeZ;
+          const x = centerX + baseX * scale;
+          const y = centerY + baseY * scale;
+          const opacity = Math.min(1, (TUNNEL_DEPTH - relativeZ) / (TUNNEL_DEPTH * 0.6));
+
+          return { x, y, scale, opacity, zIndex: relativeZ };
+        }
+
+        // --- RENDERIZADO ---
+        function render() {
+          let svgContent = "";
+          let renderQueue = [];
+
+          // 1. Calcular proyecciones
+          for (let i = 0; i < cols; i++) {
+            for (let j = 0; j < rows; j++) {
+              const cell = grid[i][j];
+              if (!cell.active && !cell.dying) continue;
+
+              const proj = project(cell.baseX, cell.baseY, cell.baseZ);
+              if (proj) {
+                renderQueue.push({ cell, proj, i, j });
+              }
+            }
+          }
+
+          // 2. Ordenar por profundidad (Painter's Algorithm)
+          renderQueue.sort((a, b) => b.proj.zIndex - a.proj.zIndex);
+
+          // 3. Generar Strings SVG
+          for (let item of renderQueue) {
+            const { cell, proj, i, j } = item;
+            
+            // Determinar color
+            let fill = COLORS.stable;
+            if (cell.active && cell.age <= 1) fill = COLORS.birth;
+            else if (cell.dying) fill = COLORS.dying;
+
+            // Dibujar NODO
+            const radius = Math.max(0.5, 8 * proj.scale); // Radio base 8
+            
+            // Usamos template literals para velocidad
+            svgContent += `<circle cx="${proj.x.toFixed(1)}" cy="${proj.y.toFixed(1)}" r="${radius.toFixed(1)}" fill="${fill}" opacity="${proj.opacity.toFixed(2)}" filter="url(#glow)" />`;
+
+            // Dibujar ARISTAS (si aplica)
+            if (cell.active && proj.scale > 0.2) {
+              [[1,0], [0,1]].forEach(([dx, dy]) => {
+                const ni = (i + dx + cols) % cols;
+                const nj = (j + dy + rows) % rows;
+                const neighbor = grid[ni][nj];
+
+                if (neighbor && neighbor.active) {
+                  const nProj = project(neighbor.baseX, neighbor.baseY, neighbor.baseZ);
+                  // Chequear que no cruce el túnel visualmente
+                  if (nProj && Math.abs(nProj.zIndex - proj.zIndex) < TUNNEL_DEPTH / 2) {
+                     const strokeWidth = Math.max(0.5, 2 * proj.scale);
+                     const lineOpacity = Math.min(proj.opacity, nProj.opacity) * 0.4;
+                     svgContent += `<line x1="${proj.x.toFixed(1)}" y1="${proj.y.toFixed(1)}" x2="${nProj.x.toFixed(1)}" y2="${nProj.y.toFixed(1)}" stroke="${COLORS.stable}" stroke-width="${strokeWidth.toFixed(1)}" opacity="${lineOpacity.toFixed(2)}" />`;
+                  }
+                }
+              });
+            }
+          }
+
+          // Actualizar DOM de una sola vez
+          worldGroup.innerHTML = svgContent;
+        }
+
+        // --- BUCLE PRINCIPAL ---
+        function animate(time) {
+          cameraZ += TRAVEL_SPEED;
+
+          if (time - lastGolUpdate > 200) {
+            computeNextGeneration();
+            lastGolUpdate = time;
+          }
+
+          render();
+          requestAnimationFrame(animate);
+        }
+
+        // Inicio
+        initGrid();
+        window.addEventListener('resize', initGrid);
+        requestAnimationFrame(animate);
+
+      })();
+    ]]>
+  </script>
+</svg>
+  <div id="canvas-3d"></div>
+
+  <nav class="navbar navbar-expand-lg navbar-dark bg-transparent pt-3 fixed-top">
     <div class="container">
-      <div class="contenedora">
-<img width="90" height="50" src="imagen.jpg" class="imagen-circular" alt="fotografia" 
-     data-bs-toggle="modal" data-bs-target="#miModalDatos" 
-     style="cursor: pointer;">
-     <a class="navbar-brand">Nestor Huaylla</a>
-</div>
+      <div class="d-flex align-items-center gap-3">
+        <img src="imagen.jpg" class="profile-pic" alt="Perfil" data-bs-toggle="modal" data-bs-target="#miModalDatos">
+        <a class="navbar-brand fw-bold" href="#">BIENVENIDO</a>
+      </div>
       <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
         <span class="navbar-toggler-icon"></span>
       </button>
       <div class="collapse navbar-collapse" id="navbarNav">
         <ul class="navbar-nav ms-auto">
-          <li class="nav-item">
-            <a class="nav-link active" href="#">Inicio</a>
-          </li>
-          <li class="nav-item">
-            <a class="nav-link" href="#">Contacto</a>
-          </li>
+          <li class="nav-item"><a class="nav-link active" href="#">Inicio</a></li>
+          <li class="nav-item"><a class="nav-link" href="#proyectos">Proyectos</a></li>
         </ul>
       </div>
     </div>
   </nav>
 
-  <div class="container p-5">
-  
-    <div class="text-center mb-5">
-      <h1 class="display-4">¡Bienvenido a mi Portafolio!</h1>
+  <div class="container d-flex align-items-center justify-content-center" style="min-height: 90vh;">
+    <div class="text-center">
+      <h1 class="display-2 fw-bold" data-aos="zoom-in">Nestor Huaylla</h1>
+      <h2 class="h3 fw-light mb-4 text-info">
+        Soy <span id="typed-text"></span>
+      </h2>
+      <a href="#proyectos" class="btn btn-outline-info rounded-pill px-4 mt-3" data-aos="fade-up">⬇ Ver Mis Trabajos</a>
     </div>
-    <h2>Mis Proyectos y Prácticas - Segunda Unidad</h2>
-    <div class="list-group shadow-sm" id="miLista">
-
-      <a href="http://13.223.152.67/crudCode/public/" class="list-group-item list-group-item-action">
-        <strong>Proyecto: CRUD en CodeIgniter</strong> (Guía 03)
-      </a>
-
-      <a href="http://13.223.152.67/reportes/reportedebd.php" class="list-group-item list-group-item-action">
-        <strong>Reporte PDF</strong> desde Base de Datos (Guía 04)
-      </a>
-      <a href="http://13.223.152.67/reportes/reporteexceldebd.php" class="list-group-item list-group-item-action">
-        <strong>Reporte Excel</strong> desde Base de Datos (Guía 04)
-      </a>
-      <a href="http://13.223.152.67/graficos/reportejsdedb.php" class="list-group-item list-group-item-action">
-        <strong>Gráfico Chart.js</strong> desde Base de Datos (Guía 04)
-      </a>
-
-      <a href="http://13.223.152.67/dbajax/index.html" class="list-group-item list-group-item-action">
-        Práctica: AJAX con PHP y BD (Guía 12)
-      </a>
-      <a href="http://13.223.152.67/json/index.html" class="list-group-item list-group-item-action">
-        Práctica: AJAX con JQuery y JSON (Guía 12)
-      </a>
-      <a href="http://13.223.152.67/jquery/index.html" class="list-group-item list-group-item-action">
-        Práctica: AJAX con JQuery (Guía 12)
-      </a>
-      <a href="http://13.223.152.67/ajax/ajax.html" class="list-group-item list-group-item-action">
-        Práctica: AJAX Nativo (Guía 12)
-      </a>
-    </div>
-     <h2>Trabajo-Primera Unidad</h2>
-     <div class="list-group shadow-sm" id="miLista">
-      <a href="http://13.223.152.67/ajax/ajax.html" class="list-group-item list-group-item-action">
-        Práctica: AJAX Nativo (Guía 12)
-      </a>
-     </div>
-
   </div>
-  <script src="complementos.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <div class="modal fade" id="miModalDatos" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog">
-    <div class="modal-content">
-      
-      <div class="modal-header bg-dark text-white">
-        <h5 class="modal-title">Mis Datos Personales</h5>
-        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+
+  <div class="container pb-5" id="proyectos">
+    
+    <h2 class="section-title" data-aos="fade-right">Proyecto Principal</h2>
+    <div class="row g-4 mb-5">
+      <div class="col-md-12" data-aos="flip-up">
+        <a href="http://13.223.152.67/crudCode/public/" class="card p-4 glass-card h-100" target="_blank">
+          <div class="d-flex justify-content-between align-items-center">
+            <div>
+              <h3 class="text-info mb-1">🚀 Sistema CRUD Completo</h3>
+              <p class="text-muted mb-0">CodeIgniter 4 + MySQL + Bootstrap (Guía 03)</p>
+            </div>
+            <span class="badge bg-info text-dark">Destacado</span>
+          </div>
+        </a>
       </div>
-      
-      <div class="modal-body text-center">
-        <img src="imagen.jpg" class="rounded-circle mb-3" width="100" height="100" alt="Avatar">
-        <h4>Nestor Fernando Huaylla Benito</h4>
-        <p class="text-muted">Estudiante</p>
-        <hr>
-        <div class="text-start">
-            <p><strong>Email:</strong> huallbenit@gmail.com</p>
-            <p><strong>Universidad:</strong> UNAP</p>
-            <p><strong>Github:</strong> <a href="https://github.com/NestorHuaylla" target="_blank">github.com/NestorHuaylla</a></p>
+    </div>
+
+    <h2 class="section-title" data-aos="fade-right">Módulo de Reportes (Guía 04)</h2>
+    <div class="row g-4 mb-5">
+      <div class="col-md-4" data-aos="fade-up" data-aos-delay="100">
+        <a href="http://13.223.152.67/reportes/reportedebd.php" class="card p-3 glass-card h-100" target="_blank">
+          <h5 class="text-danger">📄 Reporte en PDF</h5>
+          <p class="small text-secondary mb-0">Generado con librería FPDF.</p>
+        </a>
+      </div>
+      <div class="col-md-4" data-aos="fade-up" data-aos-delay="200">
+        <a href="http://13.223.152.67/reportes/reporteexceldebd.php" class="card p-3 glass-card h-100" target="_blank">
+          <h5 class="text-success">📊 Reporte en Excel</h5>
+          <p class="small text-secondary mb-0">Generado con PHPSpreadsheet.</p>
+        </a>
+      </div>
+      <div class="col-md-4" data-aos="fade-up" data-aos-delay="300">
+        <a href="http://13.223.152.67/graficos/reportejsdedb.php" class="card p-3 glass-card h-100" target="_blank">
+          <h5 class="text-warning">📈 Gráfico Estadístico</h5>
+          <p class="small text-secondary mb-0">Dashboard con Chart.js.</p>
+        </a>
+      </div>
+    </div>
+
+    <h2 class="section-title" data-aos="fade-right">Prácticas AJAX (Guía 12)</h2>
+    <div class="row g-4 mb-5">
+      <div class="col-md-6" data-aos="fade-up">
+        <a href="http://13.223.152.67/dbajax/index.html" class="card p-3 glass-card h-100" target="_blank">
+          <h5 class="text-primary">⚡ AJAX + BD</h5>
+          <p class="small text-secondary mb-0">PHP y MySQL asíncrono.</p>
+        </a>
+      </div>
+      <div class="col-md-6" data-aos="fade-up">
+        <a href="http://13.223.152.67/json/index.html" class="card p-3 glass-card h-100" target="_blank">
+          <h5 class="text-primary">🔄 AJAX + JSON</h5>
+          <p class="small text-secondary mb-0">Consumo de datos JSON.</p>
+        </a>
+      </div>
+      <div class="col-md-6" data-aos="fade-up">
+        <a href="http://13.223.152.67/jquery/index.html" class="card p-3 glass-card h-100" target="_blank">
+          <h5 class="text-primary">🔌 AJAX + jQuery</h5>
+          <p class="small text-secondary mb-0">Carga dinámica.</p>
+        </a>
+      </div>
+      <div class="col-md-6" data-aos="fade-up">
+        <a href="http://13.223.152.67/ajax/ajax.html" class="card p-3 glass-card h-100" target="_blank">
+          <h5 class="text-primary">🛠️ AJAX Nativo</h5>
+          <p class="small text-secondary mb-0">JavaScript Puro.</p>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="miModalDatos" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content bg-dark text-white border-secondary">
+        <div class="modal-header border-secondary">
+          <h5 class="modal-title">Mis Datos Personales</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body text-center">
+          <img src="imagen.jpg" class="rounded-circle mb-3 border border-info" width="100" height="100" alt="Avatar" style="object-fit: cover;">
+          <h4>Nestor Fernando Huaylla Benito</h4>
+          <p class="text-info">Estudiante</p>
+          <hr class="border-secondary">
+          <div class="text-start ps-3">
+            <p><strong>📧 Email:</strong> huallbenit@gmail.com</p>
+            <p><strong>🏫 Universidad:</strong> UNAP</p>
+            <p><strong>💻 Github:</strong> <a href="https://github.com/NestorHuaylla" class="link-info" target="_blank">github.com/NestorHuaylla</a></p>
+          </div>
+        </div>
+        <div class="modal-footer border-secondary">
+          <button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Cerrar</button>
         </div>
       </div>
-      
-      <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
-      </div>
-      
     </div>
   </div>
-</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
+  <script src="https://unpkg.com/typed.js@2.1.0/dist/typed.umd.js"></script>
+  
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+  <script>
+    // 1. INICIAR ANIMACIONES AOS
+    AOS.init({ duration: 800, once: true });
+
+    // 2. INICIAR TYPED (Texto máquina de escribir)
+    var typed = new Typed('#typed-text', {
+      strings: ["Estudiante"],
+      typeSpeed: 50,
+      backSpeed: 30,
+      loop: true
+    });
+
+    // 3. INICIAR THREE.JS (ANIMACIÓN 3D INFINITA)
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ alpha: true }); // Transparente para ver tu SVG de fondo
+    
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.getElementById('canvas-3d').appendChild(renderer.domElement);
+
+    // Creamos la esfera geométrica (Red/Wireframe)
+    const geometry = new THREE.IcosahedronGeometry(13, 1);
+    const material = new THREE.MeshBasicMaterial({ 
+      color: 0x00ffcc, // Color Cyan Tecnológico
+      wireframe: true, 
+      transparent: true, 
+      opacity: 0.25 
+    });
+    const sphere = new THREE.Mesh(geometry, material);
+    scene.add(sphere);
+
+    sphere.position.x = 8; // Mover a la derecha para que no tape el texto
+    camera.position.z = 20;
+
+    // Bucle de animación infinita
+    function animate() {
+      requestAnimationFrame(animate);
+      
+      // Rotación suave
+      sphere.rotation.x += 0.0015;
+      sphere.rotation.y += 0.0025;
+
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // Ajustar si cambian el tamaño de la ventana
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+
 </body>
 </html>
